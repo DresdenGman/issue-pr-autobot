@@ -1,0 +1,78 @@
+name: Discover candidate issues
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Find and publish candidate issues
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const query = 'is:issue is:open no:assignee label:"good first issue"';
+            const response = await github.rest.search.issuesAndPullRequests({
+              q: query,
+              sort: 'updated',
+              order: 'desc',
+              per_page: 30
+            });
+
+            const candidates = response.data.items
+              .filter(item => !item.pull_request)
+              .slice(0, 20)
+              .map((item, index) => {
+                const repo = item.repository_url.split('/').slice(-2).join('/');
+                return `${index + 1}. [${repo}#${item.number}: ${item.title}](${item.html_url})`;
+              })
+              .join('\n');
+
+            const marker = '<!-- issue-pr-autobot:candidates -->';
+            const body = [
+              marker,
+              '# Weekly candidate issues',
+              '',
+              `Updated: ${new Date().toISOString()}`,
+              '',
+              candidates || 'No unassigned good-first-issue candidates found.',
+              '',
+              '## Safety',
+              '- Review each candidate before implementation.',
+              '- Do not submit changes to repositories that prohibit AI or automated contributions.',
+              '- External PR creation requires a PAT with fork and pull-request permissions.'
+            ].join('\n');
+
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100
+            });
+
+            const existing = issues.find(issue =>
+              !issue.pull_request && issue.body?.includes(marker)
+            );
+
+            if (existing) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: 'Weekly candidate issues',
+                body,
+                labels: ['automation']
+              });
+            }
